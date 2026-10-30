@@ -31,7 +31,8 @@ and when nothing moves, no frames are drawn at all.
 - **Buttons**: BOOT turns the screen off and on; PWR locks the touch screen (a lock icon appears at the top), a long
   press unlocks.
 
-There is no Wi-Fi in this version and the board has no real-time clock, so the watch starts at a **random date and
+There is no Wi-Fi in this version and the board has no separate real-time clock chip (see [The board](#the-board)),
+so the watch starts at a **random date and
 time** and keeps going from there. The weather and health numbers are demo data.
 
 ### Gestures
@@ -67,7 +68,11 @@ and schematics — [GitHub](https://github.com/waveshareteam/ESP32-S3-Touch-AMOL
 | USB | Type-C, the ESP32-S3's own USB: flashing and a serial port | flashing, USB commands |
 | Case | one-piece CNC aluminum, anodized, lanyard holes | — |
 
-There is no real-time clock and no microSD slot on the board.
+**About the RTC.** The introduction of Waveshare's documentation mentions an RTC, but the board has **no separate
+real-time clock chip**. There is none on the [schematic](https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75C/blob/main/hardware/schematic/ESP32-S3-Touch-AMOLED-1.75C-schematic.pdf), and an I2C scan of the board finds only `0x18`
+ES8311, `0x34` AXP2101, `0x40` ES7210, `0x5A` CST9217 and `0x6B` QMI8658 (plus an unidentified `0x7E`, an address
+reserved by the I2C standard) — no RTC address such as `0x51` or `0x68`. The time is kept by the ESP32-S3 itself, with
+its built-in RTC timer, only while the board has power; after power-off it is lost. There is no microSD slot either.
 
 ## How it works
 

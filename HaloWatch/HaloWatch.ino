@@ -19,9 +19,9 @@
 // нажатие — касания не работают, яркость — самая низкая; долгое нажатие — снова как было (display.h).
 //
 // Что откуда (lib/Halo, docs/halo.md): лента — halo_list_* (перенос ленты AmoledWear), переходы — halo_nav_* (как в
-// AmoledWear, но оба экрана вживую, без снимков), дуги — HI_ARC, время по дуге — halo_text_arc. Часов реального
-// времени на плате нет, а Wi-Fi эта версия не трогает: при включении часы ставят случайные дату и время и идут от них
-// (random_clock ниже). На экран уходит только изменившееся: в покое кадры не рисуются вовсе.
+// AmoledWear, но оба экрана вживую, без снимков), дуги — HI_ARC, время по дуге — halo_text_arc. Отдельного чипа часов
+// реального времени на плате нет, а Wi-Fi эта версия не трогает: при включении часы ставят случайные дату и время
+// и идут от них (random_clock ниже). На экран уходит только изменившееся: в покое кадры не рисуются вовсе.
 // Команды: face / face off (циферблат / галерея), open N (0 — «Страницы» … 4, 5 — кнопка у края), back, page N, demo, wx N, fx N, tick [N], day,
 // tap/press/swipe/drag/fling (искусственный палец); приборы — trace, rec, shot, prof, sys, log.
 #pragma GCC optimize("O3", "fast-math")
@@ -31,8 +31,8 @@
 #define W 466
 #define CX 233.0f
 #define DP 2.0f  // 1 dp Wear OS ≈ 2 пикселя этого экрана
-// No network and no real-time clock on the board: the watch starts at a random date and time in 2026 and keeps
-// going from there (a demo; for real time, add NTP over Wi-Fi)
+// No network and no separate real-time clock chip on the board (the ESP32 keeps time only while powered): the watch
+// starts at a random date and time in 2026 and keeps going from there (a demo; for real time, add NTP over Wi-Fi)
 static inline bool halo_clock_valid() {
   return true;
 }
