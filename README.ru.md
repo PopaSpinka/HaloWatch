@@ -46,6 +46,31 @@ Wi-Fi в этой версии нет, а часов реального врем
 | Любой экран | свайп вправо от левого края | назад |
 | Любой экран | свайп вверх от нижнего края | циферблат |
 
+## Плата
+
+<p align="center"><img src="docs/board.webp" width="460" alt="Waveshare ESP32-S3-Touch-AMOLED-1.75C"><br><sub>Картинка: Waveshare</sub></p>
+
+**[Waveshare ESP32-S3-Touch-AMOLED-1.75C](https://www.waveshare.com/esp32-s3-touch-amoled-1.75c.htm)** — маленькая
+круглая плата для разработки в алюминиевом корпусе: сенсорный AMOLED-экран 1,75 дюйма, звук, датчик движения и
+разъём для батареи. Документация — [docs.waveshare.com](https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-1.75C),
+примеры и схема — [GitHub](https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75C).
+
+| Что | Какое | В HaloWatch |
+| --- | --- | --- |
+| Процессор | ESP32-S3R8: два ядра Xtensa LX7 до 240 МГц, 512 КБ SRAM, 8 МБ PSRAM | оба ядра рисуют каждый кадр |
+| Флеш | 32 МБ | прошивка и раздел для музыки |
+| Радио | Wi-Fi 2,4 ГГц (802.11 b/g/n), Bluetooth 5 LE, антенна на плате | в этой версии не используется |
+| Экран | AMOLED 1,75", 466 × 466, 16,7 млн цветов, 700 кд/м², драйвер CO5300 по QSPI, сигнал TE | свой драйвер |
+| Тач | ёмкостный, CST9217 (I2C) | свой драйвер |
+| Датчик движения | QMI8658, 6 осей: акселерометр и гироскоп | пока не используется |
+| Питание | микросхема питания AXP2101, разъём для литиевой батареи 3,7 В (MX1.25), зарядка от USB | экран батареи, кнопка PWR |
+| Звук | кодек ES8311 с динамиком; ES7210 с двумя микрофонами и подавлением эха | плеер (ES8311) |
+| Кнопки | PWR и BOOT, обе программируемые | блокировка и выключение экрана |
+| USB | Type-C, собственный USB у ESP32-S3: прошивка и последовательный порт | прошивка, команды по USB |
+| Корпус | цельный алюминий (фрезеровка), анодированный, отверстия для ремешка | — |
+
+Часов реального времени и слота microSD на плате нет.
+
 ## Как это устроено
 
 - **Рисуется только то, что изменилось.** Каждый элемент знает, где был и где стал; перерисовываются и уходят на
@@ -157,6 +182,7 @@ python3 tools/halo_music.py HaloWatch --flash --port /dev/cu.usbmodem101
 | Значки Font Awesome Free (в `HaloWatch/src/halo_assets.cpp`) | Fonticons, Inc. | значки — [CC BY 4.0](https://fontawesome.com/license/free) |
 | Последовательность регистров кодека ES8311 (`libraries/Halo/src/halo_audio.cpp`) | по драйверу es8311 от Espressif | Apache 2.0 |
 | Пины платы и запуск экрана | по [примерам Waveshare](https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75C) | Apache 2.0 |
+| Картинка платы (`docs/board.webp`) | Waveshare, со [страницы товара](https://www.waveshare.com/esp32-s3-touch-amoled-1.75c.htm) | только чтобы показать плату |
 
 Музыка — отрывки по 20 секунд из записей [Musopen](https://musopen.org) с Wikimedia Commons:
 
@@ -173,5 +199,5 @@ python3 tools/halo_music.py HaloWatch --flash --port /dev/cu.usbmodem101
 коммерческие проекты. У чужих частей выше — свои лицензии, они остаются в силе.
 
 Проект независимый: он не связан с Google, Espressif и Waveshare и не одобрен ими. Wear OS, Pixel Watch, Android и
-Material Design — товарные знаки Google LLC; ESP32 — товарный знак Espressif Systems; названия упоминаются только
+Material Design — товарные знаки Google LLC; ESP32 — товарный знак Espressif Systems; Waveshare — товарный знак Waveshare Electronics; названия упоминаются только
 чтобы объяснить, на что похож интерфейс и на чём он работает.

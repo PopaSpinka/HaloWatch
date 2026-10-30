@@ -44,6 +44,31 @@ time** and keeps going from there. The weather and health numbers are demo data.
 | Any screen | swipe right from the left edge | back |
 | Any screen | swipe up from the bottom edge | watch face |
 
+## The board
+
+<p align="center"><img src="docs/board.webp" width="460" alt="Waveshare ESP32-S3-Touch-AMOLED-1.75C"><br><sub>Image: Waveshare</sub></p>
+
+**[Waveshare ESP32-S3-Touch-AMOLED-1.75C](https://www.waveshare.com/esp32-s3-touch-amoled-1.75c.htm)** is a small
+round development board in an aluminum case: a 1.75-inch AMOLED touch screen, sound, a motion sensor and a battery
+connector. Documentation — [docs.waveshare.com](https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-1.75C), examples
+and schematics — [GitHub](https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75C).
+
+| Part | What it is | In HaloWatch |
+| --- | --- | --- |
+| Processor | ESP32-S3R8: two Xtensa LX7 cores up to 240 MHz, 512 KB SRAM, 8 MB PSRAM | both cores draw every frame |
+| Flash | 32 MB | firmware and a partition for music |
+| Radio | Wi-Fi 2.4 GHz (802.11 b/g/n), Bluetooth 5 LE, onboard antenna | not used in this version |
+| Screen | 1.75" AMOLED, 466 × 466, 16.7M colors, 700 cd/m², CO5300 driver over QSPI, TE signal | own driver |
+| Touch | capacitive, CST9217 (I2C) | own driver |
+| Motion sensor | QMI8658, 6 axes: accelerometer and gyroscope | not used yet |
+| Power | AXP2101 power chip, connector for a 3.7 V Li-ion battery (MX1.25), charging over USB | battery screen, PWR button |
+| Sound | ES8311 codec with a speaker; ES7210 with two microphones and echo cancellation | the player (ES8311) |
+| Buttons | PWR and BOOT, both programmable | lock and screen off |
+| USB | Type-C, the ESP32-S3's own USB: flashing and a serial port | flashing, USB commands |
+| Case | one-piece CNC aluminum, anodized, lanyard holes | — |
+
+There is no real-time clock and no microSD slot on the board.
+
 ## How it works
 
 - **Only what changed is drawn.** Every element knows where it was and where it is now; only those parts of the
@@ -156,6 +181,7 @@ Third-party parts included in this repository:
 | Font Awesome Free icons (rendered into `HaloWatch/src/halo_assets.cpp`) | Fonticons, Inc. | icons [CC BY 4.0](https://fontawesome.com/license/free) |
 | ES8311 codec register sequence (`libraries/Halo/src/halo_audio.cpp`) | based on Espressif's es8311 driver | Apache 2.0 |
 | Board pins and display start-up sequence | based on [Waveshare examples](https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75C) | Apache 2.0 |
+| Board picture (`docs/board.webp`) | Waveshare, from the [product page](https://www.waveshare.com/esp32-s3-touch-amoled-1.75c.htm) | shown only to identify the board |
 
 Music — 20-second excerpts of [Musopen](https://musopen.org) recordings from Wikimedia Commons:
 
@@ -172,5 +198,5 @@ The code of this repository is under the **MIT** license ([LICENSE](LICENSE)): y
 including commercial projects. The third-party parts above keep their own licenses.
 
 This is an independent project. It is not affiliated with or endorsed by Google, Espressif or Waveshare. Wear OS,
-Pixel Watch, Android and Material Design are trademarks of Google LLC; ESP32 is a trademark of Espressif Systems;
+Pixel Watch, Android and Material Design are trademarks of Google LLC; ESP32 is a trademark of Espressif Systems; Waveshare is a trademark of Waveshare Electronics;
 the names are used only to describe what the interface looks like and what it runs on.
