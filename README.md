@@ -7,7 +7,10 @@ battery). The look and the motion are modeled on **Wear OS**, using only open so
 
 It runs on **Halo**, a small UI library written from scratch for this board: its own display driver, its own touch
 driver, its own drawing. No LVGL, no Arduino_GFX. Animations run at **60 fps with no dropped frames and no tearing**,
-and when nothing moves, no frames are drawn at all.
+and when nothing moves, no frames are drawn at all. Left alone, it dims to an **Always On** clock and sleeps until you
+touch it, press a button or pick it up.
+
+<p align="center"><a href="https://www.youtube.com/watch?v=7rBIQl6EG08"><img src="https://img.youtube.com/vi/7rBIQl6EG08/hqdefault.jpg" width="480" alt="HaloWatch on the board — video review"></a><br><sub>▶ Video review on YouTube</sub></p>
 
 | Watch face | Weather | Weather, page 2 | Gallery |
 | :---: | :---: | :---: | :---: |
@@ -16,6 +19,8 @@ and when nothing moves, no frames are drawn at all.
 | ![](docs/screenshots/gallery_end.png) | ![](docs/screenshots/pages.png) | ![](docs/screenshots/player.png) | ![](docs/screenshots/volume.png) |
 | **Settings** | **Display** | **Battery** | **Locked** |
 | ![](docs/screenshots/settings.png) | ![](docs/screenshots/display.png) | ![](docs/screenshots/battery.png) | ![](docs/screenshots/lock.png) |
+| **Always On** | | | |
+| ![](docs/screenshots/aod.png) | | | |
 
 ## What it does
 
@@ -28,8 +33,14 @@ and when nothing moves, no frames are drawn at all.
   the left edge that follows the finger.
 - **Player** with real music (four 20-second public-domain excerpts), a wavy play button and a progress ring.
 - **Settings**: a brightness slider (remembered after a restart) and a battery screen with a 24-hour chart.
-- **Buttons**: BOOT turns the screen off and on; PWR locks the touch screen (a lock icon appears at the top), a long
-  press unlocks.
+- **Always On**: after 15 s without touches or motion the screen fades out and only the face's date and clock stay,
+  dimmed, on black. The board sleeps and wakes once a minute for a moment to change the digits (and shift them a few
+  pixels, so the AMOLED does not burn in). **Touch the screen, press BOOT or pick the watch up** — you are back where
+  you were, at full brightness, at once; the waking touch presses nothing. On our battery Always On used about
+  **10 % in 8 hours** (100 % → 90 % overnight).
+- **Buttons**: BOOT turns the screen fully off and puts the board to sleep (a touch, BOOT or picking it up wakes it —
+  picking up only after it has lain still, so turning it off in your hand does not wake it again); PWR locks the touch
+  screen (a lock icon appears at the top), a long press unlocks.
 
 There is no Wi-Fi in this version and the board has no separate real-time clock chip (see [The board](#the-board)),
 so the watch starts at a **random date and
@@ -44,6 +55,7 @@ time** and keeps going from there. The weather and health numbers are demo data.
 | Gallery | swipe down from the top edge | watch face |
 | Any screen | swipe right from the left edge | back |
 | Any screen | swipe up from the bottom edge | watch face |
+| Always On or dark screen | touch, BOOT or pick the watch up | back where you were, at once |
 
 ## The board
 
@@ -61,10 +73,10 @@ and schematics — [GitHub](https://github.com/waveshareteam/ESP32-S3-Touch-AMOL
 | Radio | Wi-Fi 2.4 GHz (802.11 b/g/n), Bluetooth 5 LE, onboard antenna | not used in this version |
 | Screen | 1.75" AMOLED, 466 × 466, 16.7M colors, 700 cd/m², CO5300 driver over QSPI, TE signal | own driver |
 | Touch | capacitive, CST9217 (I2C) | own driver |
-| Motion sensor | QMI8658, 6 axes: accelerometer and gyroscope | not used yet |
+| Motion sensor | QMI8658, 6 axes: accelerometer and gyroscope | wakes the watch when you pick it up (its wake-on-motion pin, INT1, goes to GPIO21) |
 | Power | AXP2101 power chip, connector for a 3.7 V Li-ion battery (MX1.25), charging over USB | battery screen, PWR button |
 | Sound | ES8311 codec with a speaker; ES7210 with two microphones and echo cancellation | the player (ES8311) |
-| Buttons | PWR and BOOT, both programmable | lock and screen off |
+| Buttons | PWR and BOOT, both programmable | lock; screen off and sleep |
 | USB | Type-C, the ESP32-S3's own USB: flashing and a serial port | flashing, USB commands |
 | Case | one-piece CNC aluminum, anodized, lanyard holes | — |
 
@@ -85,6 +97,15 @@ its built-in RTC timer, only while the board has power; after power-off it is lo
   a heavy one right behind it.
 - **Own touch driver.** The touch chip raises a pin on every report; a task reads it and keeps the finger's speed,
   so lists fly on and transitions decide whether to finish.
+- **Steady motion.** The animation clock is the moment the screen will show the frame (taken from the TE signal,
+  like Android's Choreographer), so every frame moves by the same step; and a moving screen does not switch between
+  "ahead of the refresh" and "behind it" mid-way — that used to show a frame twice or drop one.
+- **The finger, resampled.** The touch chip reports ~100 times a second, out of step with the 60 Hz screen. The
+  finger is taken at a fixed moment before each frame is shown, between two reports, as Android does: content under
+  the finger moves by even steps (on a real drag: uneven by 0.56 px instead of 3.2 px).
+- **Light sleep.** Memory and program stay, so waking takes ~20–35 ms to a picture — no boot. The AMOLED keeps the
+  Always On picture by itself while the processor sleeps. Time in sleep is counted by the fast RC oscillator / 256:
+  the default slow one ran 0.5 % fast (half a minute per hour asleep), this one 0.03–0.06 %.
 - **Springs, as in Wear OS.** Stiffness, damping, durations and how cards shrink at the edge come from the open
   source code of Compose for Wear OS. A spring is solved exactly, so a bounce looks the same at any frame rate.
 
@@ -95,6 +116,7 @@ its built-in RTC timer, only while the board has power; after power-off it is lo
 | Paging | median 3.3 ms | 0 |
 | Scrolling the card list | median 9–11 ms | 0 |
 | Player, while music plays | median 5.7 ms | 0 |
+| Always On | one frame a minute, the rest asleep | — |
 
 The frame budget is 16.7 ms.
 
@@ -102,7 +124,7 @@ The frame budget is 16.7 ms.
 
 ### Ready file (easiest)
 
-Download **`HaloWatch-v1.0-full.bin`** from [Releases](../../releases) — it holds the firmware and the music. Write it
+Download **`HaloWatch-v1.1-full.bin`** from [Releases](../../releases) — it holds the firmware and the music. Write it
 to the board at address **0x0**.
 
 **In the browser** (Chrome or Edge, any OS): open [ESP Tool](https://espressif.github.io/esptool-js/), connect the
@@ -112,7 +134,7 @@ board by USB, press **Connect**, set the flash address to `0x0`, choose the file
 
 ```bash
 pip install esptool
-esptool --chip esp32s3 write-flash 0x0 HaloWatch-v1.0-full.bin
+esptool --chip esp32s3 write-flash 0x0 HaloWatch-v1.1-full.bin
 ```
 
 esptool finds the board itself; if not, add `--port` with the board's port: `/dev/cu.usbmodem101` on macOS,
@@ -154,15 +176,27 @@ fonts are downloaded from their original repositories on first run).
 ### USB commands
 
 The firmware listens on the USB serial port (115200). A few commands: `face`, `face off`, `open 0`…`5`, `back`,
-`tap X Y`, `swipe up|down|left|right [edge]`, `pwr`, `pwr long`, `boot`, `batdemo`, `log`, `sys`.
+`tap X Y`, `swipe up|down|left|right [edge]`, `pwr`, `pwr long`, `boot`, `batdemo`, `log`, `sys`; Always On:
+`sleep`, `wake`, `aod on|off`, `idle N` (seconds, 0 — never).
+
+On USB power the watch does not really sleep (the USB port would go quiet and the board could not be flashed): it
+dims and wakes the same way, the processor just keeps running. On battery it really sleeps. `usb on` makes it sleep on
+USB too — then wake it by hand before flashing.
 
 ## Project layout
 
 | Folder | What's inside |
 | --- | --- |
-| `HaloWatch/` | The firmware: `HaloWatch.ino` (gallery, pages), `face.h`, `weather.h`, `player.h`, `music.h`, `settings.h`, `display.h`, `battery.h`; `assets/` — fonts, icons and music sources |
-| `libraries/Halo/` | The Halo library: display and touch drivers, frame engine, drawing, springs, lists, screen transitions, audio |
+| `HaloWatch/` | The firmware: `HaloWatch.ino` (gallery, pages), `face.h`, `weather.h`, `player.h`, `music.h`, `settings.h`, `display.h`, `battery.h`, `power.h` (Always On and sleep); `assets/` — fonts, icons and music sources |
+| `libraries/Halo/` | The Halo library: display and touch drivers, frame engine, drawing, springs, lists, screen transitions, audio, sleep and wake-up |
 | `tools/` | `halo_assets.py` — fonts, icons and images for Halo; `halo_music.py` — music for the player |
+
+## Versions
+
+| Version | What's new |
+| --- | --- |
+| [1.1](../../releases/tag/v1.1) | Always On and sleep (wake by touch, BOOT or picking the watch up), steadier motion, smoother dragging, BOOT puts the board to sleep |
+| [1.0](../../releases/tag/v1.0) | First release |
 
 ## Credits
 

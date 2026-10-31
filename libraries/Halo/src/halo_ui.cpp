@@ -104,14 +104,33 @@ static bool finger_now(float *x, float *y, float *vx, float *vy) {
   } else {
     *vx = *vy = 0;
   }
-  // Отчёт пришёл до кадра — дотянуть вперёд по скорости (не больше 8 мс): палец и картинка не расходятся
-  const float ahead = fmaxf(0, fminf((int32_t)((uint32_t)esp_timer_get_time() - s[0].t_us) / 1e6f, 0.008f));
-  *x = s[0].x + *vx * ahead, *y = s[0].y + *vy * ahead;
+  // Где палец был в момент hf_finger_t — он на одном расстоянии до показа кадра (движок, halo_frame.cpp). Отчёты тача
+  // идут ~100 раз в секунду не в такт экрану; раньше брали последний и дотягивали по скорости до «сейчас» (не больше
+  // 8 мс) — страница погоды под пальцем шла неровными шагами: 6 px ± 2,7. Теперь, как в Android: между двумя
+  // отчётами — по прямой, после последнего — дотянуть по скорости (не больше 8 мс): ± 0,5 px, палец на 9 мс позже
+  const uint32_t ft = hf_finger_t;
+  int j = 0;  // s[j] — первый отчёт не позже ft (или самый старый)
+  while (j + 1 < n && (int32_t)(s[j].t_us - ft) > 0) j++;
+  if (j == 0) {
+    const float ahead = fminf((int32_t)(ft - s[0].t_us) / 1e6f, 0.008f);
+    *x = s[0].x + *vx * ahead, *y = s[0].y + *vy * ahead;
+  } else if ((int32_t)(s[j].t_us - ft) > 0) {  // палец коснулся позже ft — первое касание как есть
+    *x = s[j].x, *y = s[j].y;
+  } else {
+    const float u = (float)(int32_t)(ft - s[j].t_us) / (float)(int32_t)(s[j - 1].t_us - s[j].t_us);
+    *x = s[j].x + (s[j - 1].x - s[j].x) * u, *y = s[j].y + (s[j - 1].y - s[j].y) * u;
+  }
+  if (halo_trace_on) halo_trace_put(TR_FINGER, ft, (uint16_t)constrain(*x * 64, 0.0f, 65535.0f), (uint16_t)constrain((int)*y, 0, 511));
   return true;
 }
 
 static volatile bool touch_on = true;
 static bool raw_was, touch_blocked;
+static bool swallow;  // касание разбудило плату (halo_power.cpp): не нажатие, пока палец не отпустят
+
+void hu_swallow_touch() {
+  swallow = true;
+}
 
 void halo_touch_on(bool on) {
   touch_on = on;
@@ -131,7 +150,9 @@ void halo_finger_update() {
   HaloFinger &f = halo_finger;
   float x, y, vx, vy;
   // Погашенный экран и выключенные касания (блокировка) пальца не видят; касание при выключенных — отметить
-  const bool raw = finger_now(&x, &y, &vx, &vy), down = raw && halo_display_is_on() && touch_on;
+  const bool raw = finger_now(&x, &y, &vx, &vy);
+  if (!raw) swallow = false;
+  const bool down = raw && !swallow && halo_display_is_on() && touch_on;
   if (raw && !raw_was && !touch_on) touch_blocked = true;
   raw_was = raw;
   const bool was = f.down;
@@ -392,4 +413,5 @@ void halo_pager_draw(const HaloPager &p) {
 void hu_begin() {
   K_PAGER = halo_spring(0.1405f, 1.0f);  // доводка страниц (Horologist, жёсткость 2000)
   finger_commands();
+  halo_trace_name(TR_FINGER, "finger", 'i');  // настоящий палец в кадре: время — момент, x × 64, y (trace.py сверяет)
 }

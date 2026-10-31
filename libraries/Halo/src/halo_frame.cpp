@@ -18,12 +18,24 @@
 //     (у верхней строки — 0,6 мс, у нижней — 16 мс). Задержка от расчёта до экрана — меньше;
 //   * вслед за проходом — тяжёлый кадр: пачку отправляем, только когда текущий проход её миновал, а следующий
 //     покажет кадр целиком. У каждой пачки — почти весь период 16,6 мс, но кадр на экране на проход позже.
-// Какой выбрать — по оценке: сумма времён пачек (по прошлым кадрам) до каждой пачки против её срока «впереди».
+// Какой выбрать — по оценке: рисование пачек (по прошлым кадрам) и очередь на шине против срока каждой «впереди».
+//
+// Ровный шаг движения (как Choreographer в Android: время кадра — от сигнала дисплея, а не от того, когда считали):
+//   * время анимации — момент, когда кадр покажет экран: перед update решаем, с какого TE кадр начнётся и пойдёт ли
+//     вслед за проходом, и берём начало этого прохода. Раньше брали время самого update — оно гуляет с ценой кадра
+//     (лёгкий кадр кончился через 2 мс после TE, тяжёлый — через 10), и шаг движения на экране гулял так же;
+//   * способ не меняется посреди движения: переход «впереди → вслед» показывает прошлый кадр дважды, обратный
+//     (два кадра в один проход) — один не показывает вовсе. Раз пошли вслед — так и идём, пока движение не встанет
+//     (кадр без изменений) или кадры долго лёгкие с запасом; тогда обратно «впереди», а чтобы два кадра не попали в
+//     один проход, новый ждёт следующего TE (проход тот же, что был бы вслед, — ничего не теряется).
+// Замер HaloWatch (лента, бросок): было 10 смен способа на 80 кадров — 6 кадров дважды, 6 ни разу, шаг движения
+// гулял до 14 мс (tools/trace.py: «кадры на экране»).
 #include "halo_internal.h"
 
 #pragma GCC optimize("O3", "fast-math")
 
 __thread HaloBand hb;
+uint32_t hf_finger_t;
 
 static HaloConfig cfg;
 static HaloUpdate m_update;
@@ -235,7 +247,7 @@ static void render_full(uint16_t *dst, bool swap) {  // dst — 466×466 в PSRA
 
 // ---------- Задача кадров ----------
 struct Stats {
-  uint32_t ticks, drawn, bands, px, sum_us, max_us, missed, update_us, update_max, chased;
+  uint32_t ticks, drawn, bands, px, sum_us, max_us, missed, update_us, update_max, chased, late;
 };
 static Stats stats, report;
 static uint32_t hp_report[2][HP_PARTS];
@@ -246,9 +258,32 @@ static int16_t split[HALO_BANDS];
 // Когда граница пачки делилась в последний раз (номер кадра): старая граница — от другой картинки (экран стоял, потом
 // сменился целиком: первый кадр перехода Settings — правое ядро 18 мс, левое 6), начинать с середины
 static uint32_t split_seq[HALO_BANDS], frame_seq;
-// Сколько стоила каждая пачка в прошлых кадрах (рисование + ожидание буфера), мкс: середина с кольцами и цифрами
-// в разы дороже краёв — по среднему выбор ошибался
+// Сколько рисовалась каждая пачка в прошлых кадрах, мкс: середина с кольцами и цифрами в разы дороже краёв — по
+// среднему выбор ошибался. Только рисование: ожидание буфера (очередь на шине) оценка считает сама — вслед за
+// проходом его нет, и по такой цене кадр «впереди» казался легче, чем есть
 static float band_cost[HALO_BANDS];
+static float us_per_px;  // передача пикселя по шине: QSPI — 4 бита за такт, 2 байта на пиксель
+
+// Успеет ли кадр впереди прохода: каждая пачка должна уйти на шину раньше, чем до неё дойдёт проход. Пачка ждёт
+// свободный буфер (рисование обгоняет шину не больше чем на столько пачек, сколько буферов), рисуется (цена по
+// прошлым кадрам × k) и встаёт в очередь на шину. start — сколько мкс прошло от TE до начала кадра
+static bool fits_ahead(const int16_t *fx0, const int16_t *fx1, float start, float blank, float row_us, float k) {
+  const int nb = hd_buffers();
+  float draw = start + 100, bus = draw, ends[4] = {};  // ends — когда освободится буфер каждой из последних пачек
+  int n = 0;
+  for (int b = 0; b < HALO_BANDS; b++) {
+    if (fx0[b] > fx1[b]) continue;
+    const int x0 = max(fx0[b] & ~1, (int)chord_x0[b]), x1 = min(fx1[b] | 1, (int)chord_x1[b]);
+    if (x0 > x1) continue;
+    if (n >= nb) draw = fmaxf(draw, ends[n % nb]);
+    draw += band_cost[b] * k + 20;
+    const float go = fmaxf(draw, bus);
+    if (go + 250 > blank + b * HALO_ROWS * row_us) return false;
+    bus = go + (x1 - x0 + 1) * min(HALO_ROWS, HALO_H - b * HALO_ROWS) * us_per_px + 10;
+    ends[n++ % nb] = bus;
+  }
+  return true;
+}
 
 // Ждать до момента t (мкс): долго — спим, остаток — крутимся
 static void wait_until(uint32_t t) {
@@ -262,17 +297,23 @@ static void bench_ring();
 
 static void frame_task(void *) {
   for (auto &c : band_cost) c = 300;
+  us_per_px = 4e6f / cfg.bus_hz;
   chords();
   halo_damage_all();
   halo_subpixel = false;
   m_update(1.0f / 60);
-  uint32_t last = trace_now(), te_prev = hd_te_count(), report_at = millis() + cfg.report_ms;
+  uint32_t report_at = millis() + cfg.report_ms;
   bool frame_new = true;
   uint32_t frame_clock = 0;
+  // План следующего кадра (решается перед update): с какого TE начать, идти ли вслед за проходом, какой проход его
+  // покажет и когда. Проход s — тот, что начинается после TE номер s
+  uint32_t plan_te = hd_te_count() + 1, plan_show = plan_te, show_t = trace_now(), last_show = 0;
+  bool plan_chase = false, sticky = false;
+  int roomy = 0;  // сколько кадров подряд, идущих вслед, легко успели бы впереди
+  float lead_avg = 16000;  // от расчёта кадра до его показа, мкс, в среднем
   for (;;) {
-    // Ждём сигнал TE; если он уже пришёл, пока рисовался прошлый кадр (тяжёлый, вслед за проходом), — не ждём
-    // следующего, а начинаем сразу: этот кадр пойдёт вслед за проходом, который уже начался
-    if (hd_te_count() == te_prev) hd_wait_te(50);
+    // Ждём свой TE; если он уже пришёл, пока рисовался прошлый кадр (тяжёлый, вслед за проходом), — начинаем сразу
+    hd_wait_te(plan_te, 50);
     const uint32_t te = hd_te_count();
     if (!stats.ticks && !report.ticks) hc_stage(6);  // первый кадр
     stats.ticks++;
@@ -288,14 +329,12 @@ static void frame_task(void *) {
 
     const uint32_t t0 = trace_now();
     int bands = 0, px = 0;
-    // Впереди прохода или вслед за ним: успеет ли каждая пачка раньше, чем до неё дойдёт проход
+    // Впереди прохода или вслед за ним: как решено в плане, но если кадр впереди не успеет — вслед (иначе разрыв)
     const uint32_t te_t = hd_te_rise(), blank = hd_te_blank(), period = hd_te_period() ? hd_te_period() : 16650;
     const float row_us = (float)(period - blank) / HALO_H;
     const uint32_t scan = te_t + blank;  // начало прохода после этого TE
-    bool chase = false;
-    float sum = t0 - te_t + 100;
-    for (int b = 0; b < HALO_BANDS && !chase; b++)
-      if (fx0[b] <= fx1[b]) sum += band_cost[b] * 1.15f + 20, chase = sum + 250 > blank + b * HALO_ROWS * row_us;
+    const bool chase = plan_chase || !fits_ahead(fx0, fx1, t0 - te_t, blank, row_us, 1.15f);
+    const bool light = chase && fits_ahead(fx0, fx1, 0, blank, row_us, 1.5f);  // успел бы впереди с запасом
     rec_cur = rec_left > 0 && (frame_new || rec_first) && !rec_over && rec_len[1] + 64 < rec_cap;
     frame_seq++;
     for (int b = 0; b < HALO_BANDS; b++) {
@@ -308,7 +347,6 @@ static void frame_task(void *) {
         rec_first = false;
       }
       const int y = b * HALO_ROWS, rows = min(HALO_ROWS, HALO_H - y), w = x1 - x0 + 1;
-      const uint32_t bw0 = trace_now();
       uint16_t *buf = hd_buffer();
       const uint32_t c0 = trace_now();
       if (cfg.two_cores && w >= 160) {  // широкая пачка — пополам; граница — туда, где работы меньше
@@ -335,7 +373,7 @@ static void frame_task(void *) {
         if (rec_cur) rec_band(1);
         trace_span(TR_BAND, c0, b);
       }
-      band_cost[b] = band_cost[b] * 0.5f + 0.5f * (float)(trace_now() - bw0);
+      band_cost[b] = band_cost[b] * 0.5f + 0.5f * (float)(trace_now() - c0);
       if (chase) wait_until(scan + (uint32_t)((y + rows) * row_us) + 40);  // текущий проход миновал пачку
       hd_send(x0, y, w, rows);
       bands++, px += w * rows;
@@ -346,11 +384,20 @@ static void frame_task(void *) {
       hd_wait_idle();
       trace_span(TR_FINISH, f0);
       frame_us = trace_now() - t0;
-      missed = te - te_prev > 1 ? te - te_prev - 1 : 0;  // кадр начался не с первого сигнала после прошлого
+      missed = (int32_t)(te - plan_te) > 0 ? te - plan_te : 0;  // кадр начался позже своего TE
       trace_span(TR_FRAME, t0, min(missed, (uint32_t)255) | (chase ? 256 : 0), t0 + frame_us);
       stats.drawn++, stats.bands += bands, stats.px += px, stats.sum_us += frame_us, stats.missed += missed;
       stats.chased += chase;
       stats.max_us = max(stats.max_us, frame_us);
+      // Показан не тем проходом, по которому считалось его время: впереди не успел (прошлый кадр — дважды) или начат
+      // поздно
+      last_show = te + chase;
+      stats.late += last_show != plan_show;
+      // Вслед за проходом — до конца движения; обратно впереди — только после полсекунды лёгких кадров подряд
+      roomy = light ? roomy + 1 : 0;
+      sticky = chase && roomy < 30;
+    } else {
+      sticky = false, roomy = 0;  // ничего не движется — сменить способ можно незаметно
     }
     if (rec_cur && bands) {
       if (!rec_over) {
@@ -364,12 +411,27 @@ static void frame_task(void *) {
       }
     }
     rec_cur = false;
-    te_prev = te;
+    hp_frame_end();  // скетч попросил уснуть (halo_sleep) — здесь: кадр уже на экране, шина свободна
 
-    // Следующий кадр: виртуальное время — в паузе только по шагам (ровно 1/60 с)
+    // План следующего кадра: начать с ближайшего TE (уже пришёл — сразу), способ — как сейчас. Два кадра в один проход
+    // не ставим: после «вслед» кадр «впереди» ждёт ещё один TE
     const uint32_t p0 = trace_now();
-    float dt = constrain((int32_t)(p0 - last) / 1e6f, 0.001f, 0.1f);
-    last = p0;
+    uint32_t te_now, te_now_t;
+    hd_te_snapshot(&te_now, &te_now_t);
+    plan_chase = sticky;
+    plan_te = te_now != te ? te_now : te_now + 1;
+    if ((int32_t)(plan_te + plan_chase - last_show) <= 0) plan_te = last_show + 1 - plan_chase;
+    plan_show = plan_te + plan_chase;
+    // Время анимации — начало прохода, который покажет кадр. Нет сигнала TE (панель молчит) — часы платы, как раньше
+    const uint32_t te_per = hd_te_period(), show_prev = show_t;
+    show_t = te_per ? te_now_t + (plan_show - te_now) * te_per + hd_te_blank() : p0;
+    trace_mark(TR_CLOCK, (uint16_t)constrain((int32_t)(show_t - p0), 0, 65535), plan_chase);
+    // Палец — за (среднее «расчёт → показ» + 8 мс) до показа: шаг ровно как у кадров, и почти всегда между двумя
+    // отчётами тача (они раз в ~10 мс, не в такт экрану). Среднее, а не текущее: иначе шаг гулял бы с ценой кадра
+    lead_avg += (constrain((int32_t)(show_t - p0), 0, 50000) - lead_avg) * 0.05f;
+    hf_finger_t = show_t - (uint32_t)(lead_avg + 8000);
+    // Виртуальное время — в паузе только по шагам (ровно 1/60 с)
+    float dt = constrain((int32_t)(show_t - show_prev) / 1e6f, 0.001f, 0.1f);
     frame_new = !vt_paused || vt_steps > 0;
     if (vt_paused && frame_new) vt_steps--, trace_mark(TR_STEP, vt_steps);
     if (vt_paused || vt_fixed) dt = 1.0f / 60;
@@ -388,7 +450,8 @@ static void frame_task(void *) {
     }
     if (bench_ring_req) bench_ring(), bench_ring_req = false;
     if (cfg.report_ms && (int32_t)(millis() - report_at) >= 0) {
-      report_at += cfg.report_ms;
+      // После сна часы прыгают вперёд: пропущенные строки не догонять (было бы по строке в кадр)
+      report_at = (int32_t)(millis() - report_at) >= cfg.report_ms ? millis() + cfg.report_ms : report_at + cfg.report_ms;
       if (!report_ready) {
         report = stats, report_ready = true;
         memcpy(hp_report, hp_cyc, sizeof(hp_report));
@@ -478,11 +541,18 @@ bool halo_display_is_on() {
 
 // Кнопка BOOT — GPIO0 (нажата — 0): нажатие засчитывается, когда она нажата два кадра подряд после двух отпущенных
 // (дребезг контактов — короче кадра). Команда boot — то же нажатие из порта
+static bool boot_swallow;  // BOOT разбудила плату (halo_power.cpp): это нажатие уже «засчитано»
+
+void hf_swallow_boot() {
+  boot_swallow = true;
+}
+
 bool halo_boot_click() {
   static uint8_t hist = 0xFF;
   static bool down;
   hist = hist << 1 | (gpio_get_level(GPIO_NUM_0) ? 1 : 0);
   if (boot_cmd) return boot_cmd = false, true;
+  if (boot_swallow) boot_swallow = false, down = true;
   if (!down && (hist & 3) == 0) return down = true;
   if (down && (hist & 3) == 3) down = false;
   return false;
@@ -510,6 +580,7 @@ bool halo_begin(HaloUpdate update, HaloDraw draw, const HaloConfig &c) {
   halo_trace_name(TR_FINISH, "last band out", 'X');
   halo_trace_name(TR_REC, "rec", 'X');
   halo_trace_name(TR_STEP, "step", 'i');
+  halo_trace_name(TR_CLOCK, "clock", 'i');  // перед update: через сколько мкс экран покажет кадр; 1 — вслед за проходом
   halo_command("shot", cmd_shot);
   halo_command("bench", cmd_bench);
   halo_command("rec", cmd_rec);
@@ -536,10 +607,11 @@ void halo_loop() {
     const float sec = cfg.report_ms / 1000.0f;
     if (s.drawn)
       LOG("%s: %.0f fps drawn of %.0f (%lu%% behind the scan), frame %.2f ms (max %.2f), %.1f bands %.0f%% of "
-          "screen, update %.2f ms (max %.2f), missed %lu\n", cfg.name, s.drawn / sec, s.ticks / sec,
+          "screen, update %.2f ms (max %.2f), missed %lu, late %lu\n", cfg.name, s.drawn / sec, s.ticks / sec,
           (unsigned long)(100 * s.chased / s.drawn), s.sum_us / 1000.0f / s.drawn, s.max_us / 1000.0f,
           (float)s.bands / s.drawn, 100.0f * s.px / s.drawn / (HALO_W * HALO_H),
-          s.update_us / 1000.0f / max((uint32_t)1, s.ticks), s.update_max / 1000.0f, (unsigned long)s.missed);
+          s.update_us / 1000.0f / max((uint32_t)1, s.ticks), s.update_max / 1000.0f, (unsigned long)s.missed,
+          (unsigned long)s.late);
     else
       LOG("%s: idle (%.0f ticks/s), update %.2f ms\n", cfg.name, s.ticks / sec, s.update_us / 1000.0f / max((uint32_t)1, s.ticks));
     if (hp_on && s.drawn) {  // мс на нарисованный кадр: ядро 1 / ядро 0

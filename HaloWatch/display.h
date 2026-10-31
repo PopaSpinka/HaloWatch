@@ -9,9 +9,10 @@
 // catches up with a new value in 150 ms along (0, 0, 0, 1) — sharp at first, soft at the end — and the brightness of
 // the screen glides along with it. The level is kept in flash (settings.h) and applied at start.
 //
-// BOOT (anywhere, any screen): the brightness fades to zero in about 0.25 s, then the panel goes dark (halo_display_on:
-// the board keeps running, frames keep going to the panel's memory, touches are ignored); press again — the panel
-// lights up at zero and the brightness fades back in. Command boot — the same press from the serial port.
+// BOOT (anywhere, any screen) — power.h: the brightness fades to zero in about 0.25 s here (dp_power), then the panel
+// goes dark and the board sleeps; a touch, BOOT or picking it up — the screen at full brightness at once. Always On
+// (power.h) sets the panel's brightness itself (pw_bright) and keeps the panel lit at zero (pw_keep_lit). Command
+// boot — the same press from the serial port.
 //
 // The lock (PWR, anywhere): a click locks — touches stop working (halo_touch_on: no taps, swipes or gestures) and the
 // brightness glides down to the slider's lowest step; a long press (~1.5 s, the power chip decides; holding 6–10 s
@@ -96,16 +97,8 @@ static void dp_set(int v) {
   dp_from = dp_shown, dp_t = 0, dp_value = v;
 }
 
-// Every frame, whatever is on screen: BOOT, the catch-up and the brightness
+// Every frame, whatever is on screen: the catch-up, the brightness and the lock (BOOT — power.h)
 static void display_tick(float dt) {
-  if (halo_boot_click()) {
-    if (dp_power.target > 0.5f) {
-      dp_power.target = 0;
-    } else {
-      if (!halo_display_is_on()) halo_spring_set(dp_power, 0), halo_display_on(true), LOG("screen on\n");  // lit at zero
-      dp_power.target = 1;  // after halo_spring_set: it sets the target too
-    }
-  }
   // PWR: a click locks, a long press unlocks (a long press doesn't also click: the chip reports one or the other)
   const uint8_t pwr = halo_pwr_event();
   if (pwr & HALO_PWR_LONG) {
@@ -120,9 +113,11 @@ static void display_tick(float dt) {
   dp_shown = dp_from + (dp_value - dp_from) * halo_ease(EASE_SHARP, dp_t / 0.15f);
   const float k = halo_clamp01(dp_power.x), lk = halo_clamp01(dp_lock.x), lv = dp_level(dp_shown);
   ui_lock = lk;
-  const int level = (int)lroundf((lv + (DP_LEVEL[0] - lv) * lk) * k * k);  // the eye: the fade's end is the slow part
+  int level = (int)lroundf((lv + (DP_LEVEL[0] - lv) * lk) * k * k);  // the eye: the fade's end is the slow part
+  if (pw_bright >= 0) level = pw_bright;  // Always On
   if (level != dp_sent) halo_brightness(level), dp_sent = level;
-  if (dp_power.target < 0.5f && dp_power.x < 0.01f && halo_display_is_on()) halo_display_on(false), LOG("screen off\n");
+  if (dp_power.target < 0.5f && dp_power.x < 0.01f && halo_display_is_on() && !pw_keep_lit)
+    halo_display_on(false), LOG("screen off\n");
 }
 
 static void display_enter() {

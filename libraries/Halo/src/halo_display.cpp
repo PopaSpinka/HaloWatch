@@ -249,14 +249,19 @@ void hd_state(int *f, int *queued, int *free_bufs) {
 // ---------- Сигнал TE ----------
 static DRAM_ATTR volatile uint32_t te_rise, te_period, te_count, te_blank = 616;
 static DRAM_ATTR volatile TaskHandle_t te_waiter;
+static portMUX_TYPE te_mux = portMUX_INITIALIZER_UNLOCKED;  // номер сигнала и его время — парой (hd_te_snapshot)
 
 static void IRAM_ATTR te_isr(void *) {
   const uint32_t now = (uint32_t)esp_timer_get_time();
   if ((REG_READ(GPIO_IN_REG) >> HALO_PIN_TE) & 1) {  // начало паузы между проходами
     if (halo_trace_on) halo_trace_put(TR_TE, now, 0, 0);
-    if (te_rise) te_period = now - te_rise;
+    portENTER_CRITICAL_ISR(&te_mux);
+    // Период — только между соседними сигналами: после сна или паузы панели «период» был бы длиной в сон, и движок
+    // растянул бы по нему проход (вслед за проходом ждал бы секунды)
+    if (te_rise && now - te_rise < 25000) te_period = now - te_rise;
     te_rise = now;
     te_count++;
+    portEXIT_CRITICAL_ISR(&te_mux);
     TaskHandle_t w = te_waiter;
     if (w) {
       BaseType_t woken = pdFALSE;
@@ -269,12 +274,20 @@ static void IRAM_ATTR te_isr(void *) {
   }
 }
 
-bool hd_wait_te(uint32_t timeout_ms) {
+// Ждущий записан до проверки счётчика: сигнал, пришедший между проверкой и сном, не теряется
+bool hd_wait_te(uint32_t count, uint32_t timeout_ms) {
   te_waiter = xTaskGetCurrentTaskHandle();
-  ulTaskNotifyTake(pdTRUE, 0);  // пропущенный раньше сигнал не считается
-  const bool ok = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(timeout_ms)) > 0;
+  ulTaskNotifyTake(pdTRUE, 0);  // старые уведомления не считаются — смотрим на счётчик
+  bool ok = true;
+  while (ok && (int32_t)(te_count - count) < 0) ok = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(timeout_ms)) > 0;
   te_waiter = nullptr;
   return ok;
+}
+
+void hd_te_snapshot(uint32_t *count, uint32_t *rise) {
+  portENTER_CRITICAL(&te_mux);
+  *count = te_count, *rise = te_rise;
+  portEXIT_CRITICAL(&te_mux);
 }
 
 uint32_t hd_te_count() {
@@ -342,6 +355,11 @@ static void panel_cmd(uint8_t cmd, int data = -1) {
 }
 
 bool hd_begin(uint32_t hz, int buffers, uint8_t brightness) {
+  // Падение во сне оставляет выводы тача и датчика движения «будить по уровню» с включённым прерыванием — перезагрузка
+  // это сохраняет, и первое же прерывание (здесь ставится их служба) зацикливалось: второе падение подряд и безопасный
+  // режим с чёрным экраном (halo_power.cpp). Сначала — сбросить
+  for (int p : {HALO_PIN_TP_INT, HALO_PIN_IMU_INT1, HALO_PIN_BOOT})
+    gpio_wakeup_disable((gpio_num_t)p), gpio_intr_disable((gpio_num_t)p);
   gpio_set_direction((gpio_num_t)HALO_PIN_CS, GPIO_MODE_OUTPUT);
   gpio_set_level((gpio_num_t)HALO_PIN_CS, 1);
   gpio_set_direction((gpio_num_t)HALO_PIN_RST, GPIO_MODE_OUTPUT);

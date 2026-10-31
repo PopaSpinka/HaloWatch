@@ -62,6 +62,7 @@ static int32_t fc_offset;       // shift of the clock, s (the demo, tick, day)
 static uint32_t fc_demo_until;               // the demo's clock goes back to real time then
 static uint8_t fc_fx = HALO_FX_FADE;         // the transition to the Weather screen: Fade (fx N — another, to compare)
 static bool fc_check;
+static bool fc_still;  // Always On (power.h): digits and date change without rolling — asleep there is no time to play it
 static volatile int fc_cmd_wx = -1, fc_cmd_fx = -1;
 static volatile bool fc_cmd_demo;
 static volatile int32_t fc_cmd_shift;
@@ -148,17 +149,24 @@ static void face_tick(float dt) {
     if (t.tm_min != fc_min || t.tm_hour != fc_hour) {
       fc_min = t.tm_min, fc_hour = t.tm_hour;
       snprintf(s, sizeof(s), "%02d:%02d", fc_hour % 12 ? fc_hour % 12 : 12, fc_min);  // 12 hours, as on the gallery
-      halo_roll_set(r_time, s);
+      halo_roll_set(r_time, s, !fc_still);
     }
     if (t.tm_yday != fc_yday) {  // "THU, 29 OCT" — the mockup's format
       fc_yday = t.tm_yday;
       snprintf(s, sizeof(s), "%s, %d %s", WEEKDAY[t.tm_wday], t.tm_mday, MONTH[t.tm_mon]);
-      halo_roll_set(r_date, s);
+      halo_roll_set(r_date, s, !fc_still);
     }
   }
   halo_roll_update(r_time, dt), halo_roll_update(r_date, dt), halo_roll_update(r_temp, dt);
   halo_spring_run(fc_icon_t, K_ICON, dt);
   if (fc_icon_t.x == 1 && fc_icon_t.v == 0) fc_icon_old = nullptr;
+}
+
+// Always On (power.h): on — the clock and the date as they are now, at once (a roll still playing would freeze in
+// sleep half-way) and from then on without rolling; off — rolling again
+static void face_still(bool on) {
+  fc_still = on;
+  if (on) fc_min = fc_hour = fc_yday = -1, fc_check = true;
 }
 
 // The Weather screen right over the face, with the Fade transition

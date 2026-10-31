@@ -109,6 +109,8 @@ static int m_armed = -1, open_req = -1, cur;  // cur — открытый пун
 static volatile int cmd_open = -1;
 static float tt_k = 1;             // время сверху: 1 — на месте, 0 — уехало (ScrollAway)
 static float ui_lock;              // блокировка (display.h): 0..1 — время сверху гаснет за первую половину, потом замок
+static int pw_bright = -1;         // Always On (power.h): яркость панели в нём (−1 — своя у display.h)
+static bool pw_keep_lit;           // гаснем в Always On или уже в нём: на нуле яркости панель не выключать
 static HaloSpring sc_pos;          // индикатор прокрутки: положение (догоняет за 500 мс)
 static HaloSpring sc_vis;          // и видимость: виден, пока листают, гаснет через 2 с покоя (пружина k=400)
 static uint32_t sc_idle_ms;
@@ -391,6 +393,7 @@ static void pages_draw() {
 #include "battery.h"  // экран Battery: уровень, заряд, график за сутки; история — во флеше
 #include "music.h"    // музыка: треки в разделе флеша, декодер IMA ADPCM, звук через Halo
 #include "player.h"   // экран Music: плеер WearKit на Halo
+#include "power.h"    // Always On и сон: 15 с без касаний и движения — тусклые часы, плата спит до следующей минуты
 #include "settings.h" // настройки: разделы (Display) и хранение во флеше
 
 // ---------- Кадр ----------
@@ -404,10 +407,12 @@ static const HaloScreen FACE = {nullptr, face_update, face_layout, face_draw};
 
 static void update(float dt) {
   halo_finger_update();  // палец — раз в кадр, в начале
+  power_tick(dt);        // Always On и сон, кнопка BOOT — до циферблата: в Always On цифры сменяются без прокрутки
   clock_tick();
   face_tick(dt);  // время, дата и анимации циферблата — в каждом кадре, даже когда он закрыт галереей
-  display_tick(dt);     // кнопка BOOT и яркость (плавно) — где бы ни были
+  display_tick(dt);     // яркость (плавно) и блокировка — где бы ни были
   player_tick(dt);      // музыка и анимации плеера — играет и при закрытом экране
+  if (pw_mode == PW_AOD) return power_layout();  // Always On: только тусклые дата и часы
   if (cmd_open >= 0) open_req = cmd_open, cmd_open = -1;
   if (open_req >= 0 && halo_nav_at_home()) {  // открыть: переход Android 16
     cur = open_req;
@@ -419,6 +424,7 @@ static void update(float dt) {
 }
 
 static void draw() {  // оба ядра, каждое — свою часть пачки строк
+  if (pw_mode == PW_AOD) return power_draw();
   halo_nav_draw();
   display_overlay_draw();
 }
@@ -449,6 +455,7 @@ void setup() {
   cfg.name = "HaloWatch";
   cfg.brightness = dp_start_level();  // сохранённая яркость (или самая низкая, если заблокировано) — с первого кадра
   halo_begin(update, draw, cfg);
+  power_build();         // датчик движения (будит, когда плату берут в руки) и команды aod, idle, sleep
   Serial.println("setup done");
 }
 

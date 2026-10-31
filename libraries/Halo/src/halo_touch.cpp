@@ -19,6 +19,14 @@
 
 static i2c_master_bus_handle_t bus;
 static i2c_master_dev_handle_t dev, pmu;
+static SemaphoreHandle_t bus_mx;  // задача тача держит шину на время своих обменов, сон — на время сна
+
+void ht_bus_lock() {
+  if (bus_mx) xSemaphoreTake(bus_mx, portMAX_DELAY);
+}
+void ht_bus_unlock() {
+  if (bus_mx) xSemaphoreGive(bus_mx);
+}
 static volatile uint8_t pwr_ev;  // HALO_PWR_* с прошлого halo_pwr_event()
 static uint32_t pmu_at, batt_at;
 static HaloBattery batt;
@@ -110,8 +118,10 @@ uint8_t halo_pwr_event() {
 
 static void touch_task(void *) {
   for (;;) {
+    ht_bus_lock();
     pmu_poll();
     battery_poll();
+    ht_bus_unlock();
     if (!ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(60))) {  // 60 мс без отчётов — палец убрали
       if (hist_n) release("timeout");
       continue;
@@ -119,8 +129,11 @@ static void touch_task(void *) {
     const uint32_t t = irq_us;
     static const uint8_t cmd[2] = {0xD0, 0x00}, ack[3] = {0xD0, 0x00, 0xAB};
     uint8_t b[15] = {};
-    if (i2c_master_transmit_receive(dev, cmd, 2, b, sizeof(b), 20) != ESP_OK) continue;
-    i2c_master_transmit(dev, ack, 3, 20);
+    ht_bus_lock();
+    const bool ok = i2c_master_transmit_receive(dev, cmd, 2, b, sizeof(b), 20) == ESP_OK;
+    if (ok) i2c_master_transmit(dev, ack, 3, 20);
+    ht_bus_unlock();
+    if (!ok) continue;
     if (b[6] != 0xAB) continue;
     const int n = b[5] & 0x7F;
     if (!n || (b[0] & 0x0F) != 6) {
@@ -140,6 +153,10 @@ static void touch_task(void *) {
   }
 }
 
+void ht_kick() {  // read a report now (its interrupt may have been missed: halo_power.cpp turns it off in sleep)
+  if (task) xTaskNotifyGive(task);
+}
+
 i2c_master_dev_t *ht_i2c_device(uint8_t addr) {
   if (!bus || i2c_master_probe(bus, addr, 50) != ESP_OK) return nullptr;
   i2c_device_config_t dc = {};
@@ -148,7 +165,29 @@ i2c_master_dev_t *ht_i2c_device(uint8_t addr) {
   return i2c_master_bus_add_device(bus, &dc, &h) == ESP_OK ? h : nullptr;
 }
 
+HaloI2c halo_i2c(uint8_t addr) {
+  return ht_i2c_device(addr);
+}
+
+bool halo_i2c_write(HaloI2c d, uint8_t reg, uint8_t val) {
+  const uint8_t w[2] = {reg, val};
+  if (!d) return false;
+  ht_bus_lock();
+  const bool ok = i2c_master_transmit(d, w, 2, 20) == ESP_OK;
+  ht_bus_unlock();
+  return ok;
+}
+
+bool halo_i2c_read(HaloI2c d, uint8_t reg, uint8_t *buf, int n) {
+  if (!d) return false;
+  ht_bus_lock();
+  const bool ok = i2c_master_transmit_receive(d, &reg, 1, buf, n, 20) == ESP_OK;
+  ht_bus_unlock();
+  return ok;
+}
+
 bool ht_begin() {
+  bus_mx = xSemaphoreCreateMutex();
   i2c_master_bus_config_t bc = {};
   bc.i2c_port = I2C_NUM_0;
   bc.sda_io_num = (gpio_num_t)HALO_PIN_SDA;
